@@ -156,6 +156,9 @@
   .fl.wait{background:#fde3e2;color:var(--red2)}
   .fl.part{background:var(--warnbg);color:#78350f}
   .nm{color:var(--red2);font-weight:700}
+  .ntable tfoot td{background:#e9eef6;padding:8px 10px;font-size:12.5px;position:sticky;bottom:0}
+  .paln{font:700 12.5px "JetBrains Mono",monospace;background:#e6ecf5;color:var(--navy);padding:3px 9px;border-radius:6px;white-space:nowrap}
+  .paln.split{background:#fef3c7;color:#92400e}
 </style>
 </head>
 <body>
@@ -327,6 +330,26 @@
       </div>
       <div class="flow" id="flow"></div>
       <div id="advice"></div>
+    </section>
+
+    <section class="card" id="noteCard">
+      <div class="thead">
+        <div>
+          <h2>📄 Nota de empaque</h2>
+          <p>En qué pallet va cada producto · si se divide: <span class="mono">cant./pallet - cant./pallet</span></p>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-light" id="btnNoteText">Copiar texto</button>
+          <button class="btn btn-amber" id="btnNoteExcel">Copiar para Excel</button>
+        </div>
+      </div>
+      <div class="tscroll" style="max-height:520px">
+        <table class="otable ntable">
+          <thead><tr><th>Código Prod.</th><th>Producto</th><th>Presentación</th><th style="text-align:center">Pallet N°</th><th style="text-align:right">Unidades</th><th style="text-align:right">Bultos</th></tr></thead>
+          <tbody id="noteBody"></tbody>
+          <tfoot id="noteFoot"></tfoot>
+        </table>
+      </div>
     </section>
 
     <section>
@@ -582,7 +605,7 @@ function calculate(){
   pallets.forEach((p,i) => p.id = i+1);
 
   result = { pallets, C, cost, L };
-  renderMetrics(); renderPallets(); renderZarate(); save();
+  renderMetrics(); renderPallets(); renderNote(); renderZarate(); save();
 }
 let timer; function scheduleCalc(){ clearTimeout(timer); timer = setTimeout(calculate, 180); }
 
@@ -690,6 +713,56 @@ function renderPallets(){
   });
 }
 
+// ---------- nota de empaque ----------
+// Por producto: "7" si va entero a un pallet; "90/6-108/7" si se reparte (cantidad/pallet)
+function noteRows(){
+  const {pallets} = result; if(!pallets) return [];
+  const PK = pack2();
+  return PRODUCTS.filter(p => st[p.base].qty > 0).map(p => {
+    const parts = [];
+    pallets.forEach(pal => {
+      const q = pal.lines.filter(l => l.p.base === p.base).reduce((s,l) => s + l.q, 0);
+      if(q) parts.push({id:pal.id, q});
+    });
+    parts.sort((a,b) => a.id - b.id);
+    const total = parts.reduce((s,x) => s + x.q, 0);
+    const palTxt = parts.length === 1 ? String(parts[0].id) : parts.map(x => `${x.q}/${x.id}`).join('-');
+    const bultos = p.fmt === '2' ? Math.ceil(total / PK) : total;
+    return {p, palTxt, split: parts.length > 1, total, bultos};
+  });
+}
+const shortName = p => p.name.replace(/^MV /,'MV ').toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase()).replace(/^Mv /,'MV ');
+const presTxt = p => 'x ' + FMT[p.fmt].label.replace(',', '.');
+function renderNote(){
+  const rows = noteRows();
+  const body = $('noteBody'), foot = $('noteFoot');
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="6" class="zempty">Cargá cantidades para generar la nota de empaque.</td></tr>`; foot.innerHTML=''; return; }
+  body.innerHTML = rows.map(r => `
+    <tr>
+      <td class="code">${code(r.p)}</td>
+      <td style="font-weight:600">${shortName(r.p)}</td>
+      <td>${presTxt(r.p)}</td>
+      <td style="text-align:center"><span class="paln ${r.split?'split':''}">${r.palTxt}</span></td>
+      <td style="text-align:right;font-weight:700">${fmtN(r.total)}</td>
+      <td style="text-align:right;font-weight:700">${fmtN(r.bultos)}</td>
+    </tr>`).join('');
+  const u = rows.reduce((s,r) => s + r.total, 0), b = rows.reduce((s,r) => s + r.bultos, 0);
+  foot.innerHTML = `<tr><td colspan="4" style="text-align:right;font-weight:700">Total · ${result.pallets.length} pallets</td><td style="text-align:right;font-weight:800">${fmtN(u)}</td><td style="text-align:right;font-weight:800">${fmtN(b)}</td></tr>`;
+}
+function noteText(){
+  let t = `NOTA DE EMPAQUE – Exportación${suffix()?' '+suffix():''} – ${today()}\n(Pallet N°: cantidad/pallet si el producto se reparte)\n\n`;
+  noteRows().forEach(r => t += `${code(r.p)}  ${shortName(r.p)} ${presTxt(r.p)}  →  Pallet ${r.palTxt}  |  ${r.total} u. | ${r.bultos} bultos\n`);
+  const rows = noteRows();
+  t += `\nTotal: ${result.pallets.length} pallets · ${fmtN(rows.reduce((s,r)=>s+r.total,0))} u. · ${fmtN(rows.reduce((s,r)=>s+r.bultos,0))} bultos\n`;
+  return t;
+}
+function noteExcel(){
+  let t = 'Código Prod.\tProducto\tPresentación\tPallet N°\tUnidades\tBULTOS\n';
+  // Pallet N° se fuerza como texto para que Excel no lo convierta en fecha
+  noteRows().forEach(r => t += [code(r.p), shortName(r.p), presTxt(r.p), r.split ? `="${r.palTxt}"` : r.palTxt, r.total, r.bultos].join('\t') + '\n');
+  return t;
+}
+
 // ---------- pedido a Zárate ----------
 function zarItems(){ return PRODUCTS.filter(p => zarQty(p.base) > 0).map(p => ({p, q:zarQty(p.base), arrived:st[p.base].arrived})); }
 function renderZarate(){
@@ -750,6 +823,8 @@ function textSummary(){
     t += `\nPALLET #${p.id} – ${STATE_TXT[p.state]}${p.full?'':' '+Math.round(p.pct*100)+'%'} – ${fmtN(p.kg)} kg neto\n`;
     p.lines.forEach(l => t += `  • ${l.q} u. ${code(l.p)} ${desc(l.p)}${l.src!=='B' ? ' ['+SRC_TXT[l.src]+']' : ''}\n`);
   });
+  t += `\n--------------------------------------\nPOR PRODUCTO (Pallet N°)\n`;
+  noteRows().forEach(r => t += `  ${code(r.p)} ${shortName(r.p)} ${presTxt(r.p)}: ${r.palTxt}  (${r.total} u. · ${r.bultos} bultos)\n`);
   return t;
 }
 function excelSummary(){
@@ -766,6 +841,8 @@ $('btnCopyExcel').onclick = () => result.pallets?.length ? copy(excelSummary(), 
 $('btnZarText').onclick = () => zarItems().length ? copy(zarText(), 'Pedido a Zárate copiado') : showToast('No hay nada para pedir a Zárate');
 $('btnZarExcel').onclick = () => zarItems().length ? copy(zarExcel(), 'Pedido a Zárate copiado para Excel') : showToast('No hay nada para pedir a Zárate');
 $('btnZarAll').onclick = () => { const it = zarItems(); if(!it.length) return; const all = it.every(i => i.arrived); it.forEach(i => st[i.p.base].arrived = !all); renderOrder(); calculate(); showToast(all ? 'Pedido a Zárate marcado como pendiente' : 'Todo lo de Zárate marcado como recibido'); };
+$('btnNoteText').onclick = () => noteRows().length ? copy(noteText(), 'Nota de empaque copiada') : showToast('Primero cargá cantidades');
+$('btnNoteExcel').onclick = () => noteRows().length ? copy(noteExcel(), 'Nota de empaque copiada para Excel') : showToast('Primero cargá cantidades');
 $('modalClose').onclick = () => $('modal').classList.remove('show');
 
 // ---------- events ----------
@@ -778,7 +855,7 @@ $('pack2').addEventListener('input', () => { renderOrder(); scheduleCalc(); });
 function onCountry(){
   $('customWrap').style.display = $('country').value==='__custom' ? '' : 'none';
   $('codeExample').textContent = code(PRODUCTS[0]);
-  renderOrder(); if(result.pallets){ renderPallets(); renderZarate(); } save();
+  renderOrder(); if(result.pallets){ renderPallets(); renderNote(); renderZarate(); } save();
 }
 $('country').addEventListener('change', onCountry);
 $('customSuffix').addEventListener('input', onCountry);
