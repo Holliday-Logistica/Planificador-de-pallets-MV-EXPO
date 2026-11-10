@@ -155,6 +155,7 @@
   .fl.ready{background:var(--okbg);color:#065f46}
   .fl.wait{background:#fde3e2;color:var(--red2)}
   .fl.part{background:var(--warnbg);color:#78350f}
+  .nm{color:var(--red2);font-weight:700}
 </style>
 </head>
 <body>
@@ -203,6 +204,10 @@
           <div class="field"><label>2 kg</label><input class="inp" type="number" min="1" id="lim2" value="336"></div>
           <div class="field"><label>10 kg</label><input class="inp" type="number" min="1" id="lim10" value="55"></div>
           <div class="field"><label>7,5 kg</label><input class="inp" type="number" min="1" id="lim75" value="55"></div>
+        </div>
+        <div class="field" style="margin-top:10px;display:flex;align-items:center;gap:10px">
+          <label style="margin:0;flex:1">Bolsas de 2 kg por paquete (se reparten siempre en paquetes cerrados)</label>
+          <input class="inp" type="number" min="1" id="pack2" value="6" style="width:80px">
         </div>
       </div>
 
@@ -385,7 +390,7 @@ let result = {};
 // ---------- persistence (best-effort) ----------
 function save(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify({st, lim2:$('lim2').value, lim10:$('lim10').value, lim75:$('lim75').value,
-    country:$('country').value, custom:$('customSuffix').value, tara:$('tara').value, strat:strat(), arrMode:arrMode()})); }catch(e){}
+    country:$('country').value, custom:$('customSuffix').value, tara:$('tara').value, pack2:$('pack2').value, strat:strat(), arrMode:arrMode()})); }catch(e){}
 }
 function load(){
   try{
@@ -393,7 +398,7 @@ function load(){
     if(!d){ const o = JSON.parse(localStorage.getItem(OLD_KEY) || 'null'); if(o){ d = o; d.st = {}; Object.keys(o.qty||{}).forEach(k => d.st[k] = {qty:+o.qty[k]||0}); } }
     if(!d) return;
     Object.keys(d.st||{}).forEach(k => { if(k in st) Object.assign(st[k], d.st[k]); });
-    ['lim2','lim10','lim75','tara'].forEach(k => { if(d[k]!=null) $(k).value = d[k]; });
+    ['lim2','lim10','lim75','tara','pack2'].forEach(k => { if(d[k]!=null) $(k).value = d[k]; });
     if(d.country!=null) $('country').value = d.country;
     if(d.custom) $('customSuffix').value = d.custom;
     if(d.strat) document.querySelector(`input[name=strat][value=${d.strat}]`).checked = true;
@@ -415,6 +420,8 @@ const arrMode = () => document.querySelector('input[name=arrMode]:checked').valu
 function limits(){
   return { '2':Math.max(1,parseInt($('lim2').value)||336), '10':Math.max(1,parseInt($('lim10').value)||55), '7.5':Math.max(1,parseInt($('lim75').value)||55) };
 }
+const pack2 = () => Math.max(1, parseInt($('pack2').value) || 6);
+const notMult = (p, q) => p.fmt==='2' && q % pack2() !== 0;
 const gcd = (a,b) => b ? gcd(b, a%b) : a;
 const lcm = (a,b) => a / gcd(a,b) * b;
 // Unidades que vienen de Zárate / que están en Béccar
@@ -441,6 +448,13 @@ function locCell(p){
   if(s.loc!=='B') extra += `<label class="arr ${s.arrived?'yes':''}"><input type="checkbox" data-arr="${p.base}" ${s.arrived?'checked':''}> ${s.arrived?'Llegó de Zárate':'Marcar llegada'}</label>`;
   return `<div class="seg">${seg}</div>${extra}`;
 }
+function eqText(p, q){
+  if(!q) return '&nbsp;';
+  const base = `${fmtN(q/limits()[p.fmt])} pal.`;
+  if(notMult(p, q)){ const n = pack2(); const lo = Math.floor(q/n)*n, hi = lo + n;
+    return `<span class="nm" title="Los paquetes son de ${n}">⚠ no es múltiplo de ${n} (${lo} ó ${hi})</span>`; }
+  return base;
+}
 function renderOrder(){
   const L = limits();
   const body = $('orderBody'); body.innerHTML = '';
@@ -455,7 +469,7 @@ function renderOrder(){
       <td><div class="code">${code(p)}</div><div class="desc">${p.name}</div></td>
       <td><span class="badge ${FMT[p.fmt].cls}">${FMT[p.fmt].label}</span></td>
       <td style="text-align:right"><input class="qty" type="number" min="0" step="1" value="${q||''}" placeholder="0" data-k="${p.base}">
-        <div class="eq" data-eq="${p.base}">${q ? `${fmtN(q/L[p.fmt])} pal.` : '&nbsp;'}</div></td>
+        <div class="eq" data-eq="${p.base}">${eqText(p, q)}</div></td>
       <td>${locCell(p)}</td>`;
     body.appendChild(tr);
   });
@@ -464,7 +478,7 @@ function renderOrder(){
       const k = e.target.dataset.k;
       st[k].qty = Math.max(0, parseInt(e.target.value) || 0);
       const p = PRODUCTS.find(x => x.base===k);
-      body.querySelector(`[data-eq="${k}"]`).innerHTML = st[k].qty ? `${fmtN(st[k].qty/limits()[p.fmt])} pal.` : '&nbsp;';
+      body.querySelector(`[data-eq="${k}"]`).innerHTML = eqText(p, st[k].qty);
       e.target.closest('tr').classList.toggle('has', st[k].qty > 0);
       updateCount(); scheduleCalc();
     });
@@ -497,6 +511,7 @@ function calculate(){
   const L = limits();
   const C = lcm(lcm(L['2'], L['10']), L['7.5']);           // capacidad de un pallet en "slots"
   const cost = f => C / L[f];                              // slots que ocupa una bolsa
+  const PK = pack2();                                      // bolsas de 2 kg por paquete
   const newPal = () => ({lines:[], used:0});
   const add = (pal, it, q) => {
     const key = it.p.base + '|' + it.src;
@@ -508,7 +523,7 @@ function calculate(){
   function phase(items, open){
     const out = [], rems = [];
     items.forEach(it => {
-      const lim = L[it.p.fmt];
+      const lim = it.p.fmt==='2' ? Math.max(PK, Math.floor(L['2']/PK)*PK) : L[it.p.fmt];
       const n = Math.floor(it.q / lim);
       for(let i=0;i<n;i++){ const pal = newPal(); add(pal, it, lim); out.push(pal); }
       const r = it.q % lim;
@@ -519,7 +534,9 @@ function calculate(){
     rems.forEach(r => {
       let rem = r.q; const c = cost(r.p.fmt);
       while(rem > 0){
-        const fit = Math.floor((C - cur.used) / c);
+        let fit = Math.floor((C - cur.used) / c);
+        // 2 kg: si hay que partir el SKU, solo se cortan paquetes cerrados
+        if(r.p.fmt==='2' && rem > fit) fit = Math.floor(fit / PK) * PK;
         if(fit <= 0){ out.push(cur); cur = newPal(); continue; }
         const t = Math.min(rem, fit); add(cur, r, t); rem -= t;
       }
@@ -548,7 +565,7 @@ function calculate(){
     ? plan(i => i.p.fmt !== '2').concat(plan(i => i.p.fmt === '2'))
     : plan(() => true);
 
-  const minCost = Math.min(cost('2'), cost('10'), cost('7.5'));
+  const minCost = Math.min(cost('2')*PK, cost('10'), cost('7.5'));   // completo = no entra ni un paquete de 2 kg ni una bolsa grande
   pallets.forEach(pal => {
     pal.lines.sort((a,b) => FMT[a.p.fmt].order - FMT[b.p.fmt].order || b.q - a.q);
     pal.full = (C - pal.used) < minCost;
@@ -575,7 +592,8 @@ function freeText(pal){
   const opts = [];
   const used = new Set(pal.lines.map(l => l.p.fmt));
   const order = strat()==='separate' ? (used.has('2') ? ['2'] : ['10','7.5']) : ['2','10','7.5'];
-  order.forEach(f => { const n = Math.floor(pal.free / cost(f)); if(n>0) opts.push(`<b>${n} u. de ${FMT[f].label}</b>`); });
+  order.forEach(f => { let n = Math.floor(pal.free / cost(f)); if(f==='2') n = Math.floor(n/pack2())*pack2();
+    if(n>0) opts.push(`<b>${n} u. de ${FMT[f].label}</b>${f==='2' ? ` (${n/pack2()} paq.)` : ''}`); });
   return opts.join(' ó ');
 }
 function renderMetrics(){
@@ -756,6 +774,7 @@ $('mAereo').onclick = () => setPreset('aereo');
 $('mTerr').onclick = () => setPreset('terr');
 ['lim2','lim10','lim75'].forEach(id => $(id).addEventListener('input', () => { updateModeUI(); renderOrder(); scheduleCalc(); }));
 $('tara').addEventListener('input', scheduleCalc);
+$('pack2').addEventListener('input', () => { renderOrder(); scheduleCalc(); });
 function onCountry(){
   $('customWrap').style.display = $('country').value==='__custom' ? '' : 'none';
   $('codeExample').textContent = code(PRODUCTS[0]);
